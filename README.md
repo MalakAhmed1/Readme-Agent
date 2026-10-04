@@ -97,3 +97,8 @@ def list_files(folder_path: str):
 ```
 
 Modify these lists to exclude or include specific assets or file extensions during codebase exploration.
+
+## Known Limitation
+
+1- **503 Unvailable**: If you hit a 503 UNAVAILABLE error, that's Gemini's servers being temporarily overloaded — just wait a moment and rerun.
+ 
