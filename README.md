@@ -1,63 +1,81 @@
-# readme-agent
+# README Agent
 
-A CLI agent that inspects a local project and automatically (re)generates its `README.md`. It uses a Groq-hosted chat model with function-calling tools so the model can explore the project's files on its own, then writes out Markdown that accurately reflects the code it finds.
+An AI-powered command-line tool that automatically inspects a Python project and generates (or updates) its `README.md` from the actual source code. It uses an LLM (via the Groq API) equipped with file-inspection tools, so the resulting README reflects the current state of the code rather than going stale.
 
-## How it works
+## How It Works
 
-The logic lives in `src/readme_agent/agent.py`, where a `main()` function does all the work:
+When run, `README Agent`:
 
-1. **Target selection** — at import time, the project to document is stored in the module-level `TARGET_PROJECT`. It is taken from the first CLI argument if one is given; otherwise it defaults to the repository root (two levels above the `agent.py` file).
-2. **Prompt setup** — if a `README.md` already exists in the target project, the agent is asked to *update* it (keeping what is still correct, fixing what is outdated, and adding anything missing). If there is no README, it is asked to *write* one from scratch. In both cases the model is instructed to respond with only the raw Markdown content.
-3. **Agentic loop** — the model is given two tools and runs in a loop until it stops calling tools:
+1. Targets a project directory (passed as an argument, or defaulting to the project's own root).
+2. Sends the model a prompt telling it to inspect the project. The model uses two tools iteratively:
+   - **`list_files`** – walks the folder tree and returns full paths of readable files (skipping VCS, virtual-environment, cache, and lock/image files).
+   - **`read_file`** – returns the text content of a single file by full path.
+3. Builds up the conversation, calling the tools as many times as the model requests, until it returns the README text.
+4. Writes the result to `README.md` in the target project.
 
-   - `list_files(folder_path)` — walks the folder and returns the full paths of all readable files, skipping common noise (`.env`, `uv.lock`, `.gitignore`, image and `.lock` files, and directories like `.venv`, `.git`, `__pycache__`, `.pytest_cache`).
-   - `read_file(path)` — returns the text contents of a single file, gracefully handling files that can't be decoded as UTF-8 (it returns the string `[Could not read this file]` instead of raising).
+If a `README.md` already exists, the model is asked to **update** it — keeping what is still correct, rewording anything outdated, and adding anything missing. Otherwise it creates the README from scratch. In both cases the model is instructed to return **only the raw Markdown content**.
 
-   A `call_tool()` dispatcher routes each named tool call to the appropriate function and returns `"Unknown tool"` for unrecognized names. On each iteration the agent prints a `DEBUG - full response: ...` line showing the raw API response, then either appends the assistant's tool calls and the tool results to the message history (and loops again) or finalizes.
-4. **Output** — once the model returns its final content (with no further tool calls), it is written to `<target project>/README.md` (UTF-8) and a confirmation message (`README.md written successfully.`) is printed. If the model returns no content, a `RuntimeError` is raised.
+## Project Layout
 
-The model used is `qwen/qwen3.8-27b`, with `max_tokens=900`.
+```
+readme-agent/
+├── .python-version          # Pinned Python version (3.14)
+├── pyproject.toml           # Project & build configuration
+├── README.md
+└── src/
+    └── readme_agent/
+        ├── __init__.py      # Re-exports main()
+        └── agent.py         # CLI logic: tools, LLM loop, README writer
+```
+
+## Requirements
+
+- **Python 3.14+**
+- **Groq API key** – set the `GROQ_API_KEY` environment variable (a `.env` file is loaded automatically via `python-dotenv`).
+
+Dependencies:
+
+| Package | Purpose |
+| --- | --- |
+| `groq` | Client for the Groq LLM API (chat completions with tools) |
+| `python-dotenv` | Loads environment variables from a `.env` file |
+| `google-genai` | Declared dependency (the active client is currently Groq) |
 
 ## Installation
 
-The project uses [uv](https://docs.astral.sh/uv/) with Python 3.14 (`requires-python = ">=3.14"`; see `.python-version`). The package is built with the `uv_build` backend.
+The project uses [`uv`](https://docs.astral.sh/uv/). From the project root:
 
 ```bash
-uv venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-uv pip install -e .
-```
+# Install the package in editable mode with its dependencies
+uv sync
 
-### Dependencies
-
-| Package           | Version      | Purpose                                                               |
-| ----------------- | ------------ | --------------------------------------------------------------------- |
-| `groq`          | `>=1.7.0`  | Client for the Groq chat-completion API used to drive the agent.      |
-| `python-dotenv` | `>=1.2.4`  | Loads environment variables from a`.env` file.                      |
-| `google-genai`  | `>=2.26.0` | Declared in`pyproject.toml` but not currently imported by the code. |
-
-## Configuration
-
-The agent loads environment variables from a `.env` file in the working directory (via `load_dotenv()` at import time) and reads its credentials from the environment:
-
-| Variable         | Description                                                                                                                           |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `GROQ_API_KEY` | API key for the Groq client. Read at import time via`os.environ.get("GROQ_API_KEY")` and passed to the `Groq` client constructor. |
-
-Create a `.env` file (never commit it) containing:
-
-```
-GROQ_API_KEY=your-key-here
+# (optionally) create a .env file containing:
+#   GROQ_API_KEY=your_key_here
 ```
 
 ## Usage
 
-Run the agent by executing `agent.py` directly, pointing it at a project directory:
-
 ```bash
-python src/readme_agent/
+# Update/create the README for a specific project directory
+readme-agent /path/to/project
+
+# With no argument, it targets the readme-agent project's own root
+readme-agent
 ```
 
-### **Note**
+The command prints debugging info (the full LLM response) as it runs, then writes `README.md` and prints a success message.
 
-> This README was generated by `readme-agent` itself — a project documenting its own project.
+## Configuration
+
+| Setting | Source | Default |
+| --- | --- | --- |
+| Target project | First CLI argument | The `readme-agent` project root |
+| LLM model | Hardcoded in `agent.py` | `qwen/qwen3.8-27b` |
+| Max tokens | Hardcoded in `agent.py` | `900` |
+| API key | `GROQ_API_KEY` env var / `.env` | — |
+
+## Notes & Caveats
+
+- The model name (`qwen/qwen3.8-27b`) and token limit are currently **hardcoded** in `src/readme_agent/agent.py`; adjust them there if needed.
+- A `DEBUG` line prints the entire LLM response on every API call.
+- The package **entry point** is `readme_agent:main`, but `__init__.py` imports `main` from the `agent` submodule. Both resolve to the same `main()`, so it works as shipped — though wiring the script directly to `readme_agent.agent:main` would make that link
