@@ -1,99 +1,63 @@
-# 📝 Readme Agent
+# readme-agent
 
-An intelligent, autonomous CLI tool powered by Gemini 3.5 Flash that automatically analyzes your codebase and generates a comprehensive, production-ready `README.md` file.
+A CLI agent that inspects a local project and automatically (re)generates its `README.md`. It uses a Groq-hosted chat model with function-calling tools so the model can explore the project's files on its own, then writes out Markdown that accurately reflects the code it finds.
 
-By leveraging **Gemini Function Calling (Tool Use)**, the agent explores your project directory, lists source files, and reads their contents dynamically to craft accurate and contextual documentation.
+## How it works
 
----
+The logic lives in `src/readme_agent/agent.py`, where a `main()` function does all the work:
 
-## ✨ Features
+1. **Target selection** — at import time, the project to document is stored in the module-level `TARGET_PROJECT`. It is taken from the first CLI argument if one is given; otherwise it defaults to the repository root (two levels above the `agent.py` file).
+2. **Prompt setup** — if a `README.md` already exists in the target project, the agent is asked to *update* it (keeping what is still correct, fixing what is outdated, and adding anything missing). If there is no README, it is asked to *write* one from scratch. In both cases the model is instructed to respond with only the raw Markdown content.
+3. **Agentic loop** — the model is given two tools and runs in a loop until it stops calling tools:
 
-- **Agentic Code Exploration**: Uses Gemini's native tool-calling capabilities to recursively list files and inspect code blocks.
-- **Smart Filtering**: Built-in exclusion lists to automatically ignore binary files, lockfiles, virtual environments (`.venv`), git configurations (`.git`), caches, and environment files.
-- **Powered by Gemini 3.5**: Leverages the official, ultra-fast `google-genai` SDK and `gemini-3.5-flash` model.
-- **Flexible Target Directory**: Accepts any local folder path as a CLI argument to write a README for any project.
-- **Single-Command Documentation**: Generates a professional, beautifully formatted README.md directly in your target folder in seconds.
+   - `list_files(folder_path)` — walks the folder and returns the full paths of all readable files, skipping common noise (`.env`, `uv.lock`, `.gitignore`, image and `.lock` files, and directories like `.venv`, `.git`, `__pycache__`, `.pytest_cache`).
+   - `read_file(path)` — returns the text contents of a single file, gracefully handling files that can't be decoded as UTF-8 (it returns the string `[Could not read this file]` instead of raising).
 
----
+   A `call_tool()` dispatcher routes each named tool call to the appropriate function and returns `"Unknown tool"` for unrecognized names. On each iteration the agent prints a `DEBUG - full response: ...` line showing the raw API response, then either appends the assistant's tool calls and the tool results to the message history (and loops again) or finalizes.
+4. **Output** — once the model returns its final content (with no further tool calls), it is written to `<target project>/README.md` (UTF-8) and a confirmation message (`README.md written successfully.`) is printed. If the model returns no content, a `RuntimeError` is raised.
 
-## 🛠️ Tech Stack
+The model used is `qwen/qwen3.8-27b`, with `max_tokens=900`.
 
-- **Language**: Python >= 3.14 (or modern Python versions utilizing the `uv` build backend)
-- **AI Framework**: `google-genai` SDK (Gemini API)
-- **Environment Management**: `python-dotenv`
-- **Build/Package Manager**: `uv` / `uv_build`
+## Installation
 
----
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-
-Ensure you have Python and `uv` installed. You will also need a **Gemini API Key**. Get yours from [Google AI Studio](https://aistudio.google.com/).
-
-### 2. Installation
-
-Clone this repository and navigate to its directory:
+The project uses [uv](https://docs.astral.sh/uv/) with Python 3.14 (`requires-python = ">=3.14"`; see `.python-version`). The package is built with the `uv_build` backend.
 
 ```bash
-git clone https://github.com/MalakAhmed1/Readme-Agent.git
-cd readme-agent
+uv venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+uv pip install -e .
 ```
 
-Install dependencies using `uv`:
+### Dependencies
+
+| Package           | Version      | Purpose                                                               |
+| ----------------- | ------------ | --------------------------------------------------------------------- |
+| `groq`          | `>=1.7.0`  | Client for the Groq chat-completion API used to drive the agent.      |
+| `python-dotenv` | `>=1.2.4`  | Loads environment variables from a`.env` file.                      |
+| `google-genai`  | `>=2.26.0` | Declared in`pyproject.toml` but not currently imported by the code. |
+
+## Configuration
+
+The agent loads environment variables from a `.env` file in the working directory (via `load_dotenv()` at import time) and reads its credentials from the environment:
+
+| Variable         | Description                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `GROQ_API_KEY` | API key for the Groq client. Read at import time via`os.environ.get("GROQ_API_KEY")` and passed to the `Groq` client constructor. |
+
+Create a `.env` file (never commit it) containing:
+
+```
+GROQ_API_KEY=your-key-here
+```
+
+## Usage
+
+Run the agent by executing `agent.py` directly, pointing it at a project directory:
 
 ```bash
-uv sync
+python src/readme_agent/
 ```
 
-### 3. Configure Environment Variables
+### **Note**
 
-Create a `.env` file in the project root:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
----
-
-## 📖 Usage
-
-Run the agent by executing the script and passing the path of the target directory you want to generate documentation for:
-
-```bash
-uv run python src/readme_agent/agent.py "/path/to/target/project"
-```
-
-If no argument is passed, the agent will default to analyzing its own codebase:
-
-```bash
-uv run python src/readme_agent/agent.py
-```
-
-### 🔍 How It Works (Under the Hood)
-
-1. **Tool Definition**: The script registers two Python functions as Gemini-executable tools:
-   - `list_files(folder_path)`: Scans the target folder and returns paths of relevant readable files.
-   - `read_file(path)`: Safely reads the text content of a requested file using UTF-8 encoding.
-2. **Initialization**: The agent initializes a conversation session with the `gemini-3.5-flash` model and triggers an initial query to analyze the target directory structure.
-3. **Agent Loop**:
-   - The LLM determines which files are important and requests to inspect them via function/tool calls.
-   - The script executes those tools locally and feeds the outputs back to the LLM.
-   - This loop runs dynamically until the model has gathered all necessary details about the project's logic, architecture, and configuration.
-4. **File Generation**: The LLM synthesizes the gathered details and generates the complete, raw Markdown content, which is then written directly to a new `README.md` at the root of your target project folder.
-
----
-
-## ⚙️ Configuration & Customization
-
-You can customize file and directory exclusion rules within the `list_files` function in `src/readme_agent/agent.py`:
-
-```python
-def list_files(folder_path: str):
-    ignore = [".env", "uv.lock", ".gitignore"]
-    ignore_exts = {".png", ".jpg", ".jpeg", ".lock"}
-    ignore_dirs = {".venv", ".git", "__pycache__", ".pytest_cache"}
-    # ...
-```
-
-Modify these lists to exclude or include specific assets or file extensions during codebase exploration.
+> This README was generated by `readme-agent` itself — a project documenting its own project.
