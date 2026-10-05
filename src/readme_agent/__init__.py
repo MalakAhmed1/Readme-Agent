@@ -1,2 +1,1 @@
-# def main() -> None:
-#     print("Hello from readme-agent!")
+from .agent import main
